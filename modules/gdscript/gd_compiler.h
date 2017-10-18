@@ -3,10 +3,9 @@
 /*************************************************************************/
 /*                       This file is part of:                           */
 /*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
+/*                    http://www.godotengine.org                         */
 /*************************************************************************/
 /* Copyright (c) 2007-2017 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2017 Godot Engine contributors (cf. AUTHORS.md)    */
 /*                                                                       */
 /* Permission is hereby granted, free of charge, to any person obtaining */
 /* a copy of this software and associated documentation files (the       */
@@ -91,6 +90,7 @@ class GDCompiler {
 			}
 		}
 
+		//int get_identifier_pos(const StringName& p_dentifier) const;
 		HashMap<Variant, int, VariantHasher, VariantComparator> constant_map;
 		Map<StringName, int> name_map;
 
@@ -126,6 +126,17 @@ class GDCompiler {
 		int call_max;
 	};
 
+#if 0
+	void _create_index(const GDParser::OperatorNode *on);
+	void _create_call(const GDParser::OperatorNode *on);
+
+
+	int _parse_expression(const GDParser::Node *p_expr,CodeGen& codegen);
+	void _parse_block(GDParser::BlockNode *p_block);
+	void _parse_function(GDParser::FunctionNode *p_func);
+	Ref<GDScript> _parse_class(GDParser::ClassNode *p_class);
+#endif
+
 	bool _is_class_member_property(CodeGen &codegen, const StringName &p_name);
 	bool _is_class_member_property(GDScript *owner, const StringName &p_name);
 
@@ -134,6 +145,7 @@ class GDCompiler {
 	bool _create_unary_operator(CodeGen &codegen, const GDParser::OperatorNode *on, Variant::Operator op, int p_stack_level);
 	bool _create_binary_operator(CodeGen &codegen, const GDParser::OperatorNode *on, Variant::Operator op, int p_stack_level, bool p_initializer = false);
 
+	//int _parse_subexpression(CodeGen& codegen,const GDParser::BlockNode *p_block,const GDParser::Node *p_expression);
 	int _parse_assign_right_expression(CodeGen &codegen, const GDParser::OperatorNode *p_expression, int p_stack_level);
 	int _parse_expression(CodeGen &codegen, const GDParser::Node *p_expression, int p_stack_level, bool p_root = false, bool p_initializer = false);
 	Error _parse_block(CodeGen &codegen, const GDParser::BlockNode *p_block, int p_stack_level = 0, int p_break_addr = -1, int p_continue_addr = -1);
@@ -143,6 +155,8 @@ class GDCompiler {
 	int err_column;
 	StringName source;
 	String error;
+
+	Map<StringName,Vector<int> > function_variants;
 
 public:
 	Error compile(const GDParser *p_parser, GDScript *p_script, bool p_keep_state = false);
