@@ -3,10 +3,9 @@
 /*************************************************************************/
 /*                       This file is part of:                           */
 /*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
+/*                    http://www.godotengine.org                         */
 /*************************************************************************/
 /* Copyright (c) 2007-2017 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2017 Godot Engine contributors (cf. AUTHORS.md)    */
 /*                                                                       */
 /* Permission is hereby granted, free of charge, to any person obtaining */
 /* a copy of this software and associated documentation files (the       */
@@ -271,12 +270,34 @@ int GDCompiler::_parse_expression(CodeGen &codegen, const GDParser::Node *p_expr
 				return idx | (GDFunction::ADDR_TYPE_GLOBAL << GDFunction::ADDR_BITS); //argument (stack root)
 			}
 
-			//not found, error
+			if (codegen.script->function_indices.find(identifier) >= 0) {
+				int idx = codegen.script->function_indices.find(identifier);
+				return idx | (GDFunction::ADDR_TYPE_FUNCTION<<GDFunction::ADDR_BITS);
+			}
 
-			_set_error("Identifier not found: " + String(identifier), p_expression);
+			//not found, error
+			_set_error("Identifier not found: "+String(identifier),p_expression);
 
 			return -1;
 
+
+		} break;
+		case GDParser::Node::TYPE_LAMBDA_FUNCTION: {
+			const GDParser::LambdaFunctionNode *in = static_cast<const GDParser::LambdaFunctionNode*>(p_expression);
+			if (codegen.script->function_indices.find(in->name) >= 0) {
+				if (!function_variants.has(in->name)) {
+					function_variants[in->name] = Vector<int>();
+				}
+
+				Vector<int> &list = function_variants[in->name];
+				for (int i = 0; i < in->require_keys.size(); ++i) {
+					const StringName &key = in->require_keys[i];
+					if (codegen.stack_identifiers.has(key))
+						list.push_back(codegen.stack_identifiers[key]);
+				}
+				int idx = codegen.script->function_indices.find(in->name);
+				return idx | (GDFunction::ADDR_TYPE_LAMBDA_FUNCTION<<GDFunction::ADDR_BITS);
+			}
 		} break;
 		case GDParser::Node::TYPE_CONSTANT: {
 			//return constant
@@ -485,10 +506,39 @@ int GDCompiler::_parse_expression(CodeGen &codegen, const GDParser::Node *p_expr
 						Vector<int> arguments;
 						int slevel = p_stack_level;
 
-						for (int i = 0; i < on->arguments.size(); i++) {
+						do {
+							if (instance->type==GDParser::Node::TYPE_SELF) {
+								const GDParser::SelfNode *self = static_cast<const GDParser::SelfNode*>(instance);
+								if (self->implicit && on->arguments[1]->type==GDParser::Node::TYPE_IDENTIFIER) {
+									GDParser::IdentifierNode *id = static_cast<GDParser::IdentifierNode*>(on->arguments[1]);
+									if (codegen.stack_identifiers.has(id->name)) {
+										int sv = _parse_expression(codegen, id,slevel);
+										if (sv<0)
+											return sv;
+										for(int i=2;i<on->arguments.size();i++) {
+											int ret = _parse_expression(codegen,on->arguments[i],slevel);
+											if (ret<0)
+												return ret;
+											if (ret&GDFunction::ADDR_TYPE_STACK<<GDFunction::ADDR_BITS) {
+												slevel++;
+												codegen.alloc_stack(slevel);
+											}
+											arguments.push_back(ret);
+										}
+										codegen.opcodes.push_back(p_root?GDFunction::OPCODE_CALL_STACK:GDFunction::OPCODE_CALL_STACK_RETURN);
+										codegen.opcodes.push_back(on->arguments.size()-2);
+										codegen.alloc_call(on->arguments.size()-2);
+										codegen.opcodes.push_back(sv);
+										for(int i=0,t=arguments.size();i<t;i++)
+											codegen.opcodes.push_back(arguments[i]);
+										break;
+									}
+								}
+							}
 
-							int ret;
+							for(int i=0;i<on->arguments.size();i++) {
 
+								int ret;
 							if (i == 0 && on->arguments[i]->type == GDParser::Node::TYPE_SELF && codegen.function_node && codegen.function_node->_static) {
 								//static call to self
 								ret = (GDFunction::ADDR_TYPE_CLASS << GDFunction::ADDR_BITS);
@@ -519,6 +569,7 @@ int GDCompiler::_parse_expression(CodeGen &codegen, const GDParser::Node *p_expr
 						codegen.alloc_call(on->arguments.size() - 2);
 						for (int i = 0; i < arguments.size(); i++)
 							codegen.opcodes.push_back(arguments[i]);
+						} while (false);
 					}
 				} break;
 				case GDParser::OperatorNode::OP_YIELD: {
@@ -919,7 +970,7 @@ int GDCompiler::_parse_expression(CodeGen &codegen, const GDParser::Node *p_expr
 							codegen.opcodes.push_back(key_idx);
 							slevel++;
 							codegen.alloc_stack(slevel);
-							int dst_pos = (GDFunction::ADDR_TYPE_STACK << GDFunction::ADDR_BITS) | slevel;
+							int dst_pos = (GDFunction::ADDR_TYPE_STACK<<GDFunction::ADDR_BITS)|slevel;
 
 							codegen.opcodes.push_back(dst_pos);
 
@@ -1038,13 +1089,13 @@ int GDCompiler::_parse_expression(CodeGen &codegen, const GDParser::Node *p_expr
 				} break;
 				default: {
 
-					ERR_EXPLAIN("Bug in bytecode compiler, unexpected operator #" + itos(on->op) + " in parse tree while parsing expression.");
+					ERR_EXPLAIN("Bug in bytecode compiler, unexpected operator #"+itos(on->op)+" in parse tree while parsing expression.");
 					ERR_FAIL_V(0); //unreachable code
 
 				} break;
 			}
 
-			int dst_addr = (p_stack_level) | (GDFunction::ADDR_TYPE_STACK << GDFunction::ADDR_BITS);
+			int dst_addr=(p_stack_level)|(GDFunction::ADDR_TYPE_STACK<<GDFunction::ADDR_BITS);
 			codegen.opcodes.push_back(dst_addr); // append the stack level as destination address of the opcode
 			codegen.alloc_stack(p_stack_level);
 			return dst_addr;
@@ -1384,6 +1435,12 @@ Error GDCompiler::_parse_function(GDScript *p_script, const GDParser::ClassNode 
 #endif
 		}
 		stack_level = p_func->arguments.size();
+		if (const GDParser::LambdaFunctionNode *infunc = dynamic_cast<const GDParser::LambdaFunctionNode*>(p_func)) {
+			for (int i = 0; i < infunc->require_keys.size(); ++i) {
+				codegen.add_stack_identifier(infunc->require_keys[i],stack_level+i);
+			}
+			stack_level += infunc->require_keys.size();
+		}
 	}
 
 	codegen.alloc_stack(stack_level);
@@ -1463,6 +1520,11 @@ Error GDCompiler::_parse_function(GDScript *p_script, const GDParser::ClassNode 
 	if (p_func) {
 		gdfunc->_static = p_func->_static;
 		gdfunc->rpc_mode = p_func->rpc_mode;
+	}
+
+
+	if (function_variants.has(func_name)) {
+		gdfunc->lambda_variants=function_variants[func_name];
 	}
 
 #ifdef TOOLS_ENABLED
@@ -1550,6 +1612,7 @@ Error GDCompiler::_parse_function(GDScript *p_script, const GDParser::ClassNode 
 	}
 #endif
 	gdfunc->_script = p_script;
+	gdfunc->_lambda = p_func?(p_func->type==GDParser::Node::TYPE_LAMBDA_FUNCTION):false;
 	gdfunc->source = source;
 
 #ifdef DEBUG_ENABLED
@@ -1736,6 +1799,7 @@ Error GDCompiler::_parse_class(GDScript *p_script, GDScript *p_owner, const GDPa
 			p_script->base = script;
 			p_script->_base = p_script->base.ptr();
 			p_script->member_indices = script->member_indices;
+			p_script->function_indices = script->function_indices;
 
 		} else if (native.is_valid()) {
 
@@ -1879,12 +1943,16 @@ Error GDCompiler::_parse_class(GDScript *p_script, GDScript *p_owner, const GDPa
 	bool has_ready = false;
 
 	for (int i = 0; i < p_class->functions.size(); i++) {
+		StringName name = p_class->functions[i]->name;
+		p_script->function_indices.push_back(name);
+	}
+	for(int i=0;i<p_class->functions.size();i++) {
 
-		if (!has_initializer && p_class->functions[i]->name == "_init")
-			has_initializer = true;
-		if (!has_ready && p_class->functions[i]->name == "_ready")
-			has_ready = true;
-		Error err = _parse_function(p_script, p_class, p_class->functions[i]);
+		if (!has_initializer && p_class->functions[i]->name=="_init")
+			has_initializer=true;
+		if (!has_ready && p_class->functions[i]->name=="_ready")
+			has_ready=true;
+		Error err = _parse_function(p_script,p_class,p_class->functions[i]);
 		if (err)
 			return err;
 	}
@@ -1892,6 +1960,10 @@ Error GDCompiler::_parse_class(GDScript *p_script, GDScript *p_owner, const GDPa
 	//parse static methods
 
 	for (int i = 0; i < p_class->static_functions.size(); i++) {
+		StringName name = p_class->static_functions[i]->name;
+		p_script->function_indices.push_back(name);
+	}
+	for(int i=0;i<p_class->static_functions.size();i++) {
 
 		Error err = _parse_function(p_script, p_class, p_class->static_functions[i]);
 		if (err)
